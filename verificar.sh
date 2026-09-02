@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 # Chequeo corrible del checklist de la sección 8 del plan, sin abrir Postman.
 # Si alguna de las cuatro tácticas se rompe, este script falla.
+#
+# Es una de las tres formas de verificar, equivalentes entre sí:
+#   ./verificar.sh                                        (necesita curl + jq)
+#   docker compose --profile verificacion run --rm newman (no necesita nada instalado)
+#   Postman: postman/AeroSur-TFU.postman_collection.json  (Run collection)
+#
+# Respeta los mismos puertos que docker-compose.yml:  PUERTO_PROXY=18080 ./verificar.sh
 set -uo pipefail
 
-BASE=${BASE:-http://localhost:8080}
+BASE=${BASE:-http://localhost:${PUERTO_PROXY:-8080}}
+APP2=${APP2:-http://localhost:${PUERTO_APP2:-3002}}
 FALLOS=0
 
 ok()    { printf '  \033[32mOK\033[0m   %s\n' "$1"; }
@@ -64,7 +72,7 @@ echo "$H" | grep -i '^X-Tiempo-Total:' | grep -q '[0-9]' \
 
 # --- 3. Reintentos + repuesto redundante -----------------------------------
 printf '\nTácticas de disponibilidad (reintentos / repuesto redundante)\n'
-ANTES=$(curl -s http://localhost:3002/stats | jq -r '.atendidos')
+ANTES=$(curl -s "$APP2/stats" | jq -r '.atendidos')
 
 TMP=$(mktemp -d)
 for i in $(seq 1 20); do
@@ -82,7 +90,7 @@ else
   falla "bajo carga ninguna respuesta mostró dos valores en X-Estados"
 fi
 
-DESPUES=$(curl -s http://localhost:3002/stats | jq -r '.atendidos')
+DESPUES=$(curl -s "$APP2/stats" | jq -r '.atendidos')
 [ "$DESPUES" -gt "$ANTES" ] \
   && ok "app2 atendió pedidos por primera vez ($ANTES -> $DESPUES)" \
   || falla "el contador de app2 no se movió ($ANTES -> $DESPUES): no hubo failover"

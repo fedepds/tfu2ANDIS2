@@ -11,103 +11,144 @@ Banco de pruebas que hace observables cuatro tácticas en vivo:
 | Autenticar actores | `servicio/src/auth.js` | Sin token → `401` |
 | Autorizar actores | `servicio/src/auth.js` | Mismo `PUT`: operador → `403`, supervisor → `200` |
 
-El diseño completo, los ADRs y el guion cronometrado están en **`plan-demo-tfu.md`**.
+- **Qué decir y en qué orden** (contexto de AeroSur, requerimientos, cierre): `presentacion.md`.
+- **Diseño, ADRs y guion cronometrado:** `plan-demo-tfu.md`.
+- **Comandos sueltos para copiar y pegar**, con la salida esperada: `COMANDOS.md`.
 
 ---
 
 ## 0. Requisitos
 
-| Herramienta | Versión | Para qué |
+Para levantar la demo y verificarla **alcanza con Docker**. Todo lo demás es opcional.
+
+| Herramienta | Obligatoria | Para qué |
 |---|---|---|
-| Docker + Docker Compose | cualquiera reciente | Levantar los tres contenedores |
-| k6 | **≥ 0.49** | Generar la carga y el panel web |
-| `jq` y `curl` | — | Extraer el token y correr `verificar.sh` |
+| Docker + Docker Compose | **sí** | Levantar los contenedores; también corre k6 y newman adentro |
+| `curl` | no | Los comandos de `COMANDOS.md` y `verificar.sh` (viene con macOS y Linux) |
+| Postman | no | Correr la colección con interfaz gráfica |
+| `jq` | no | Sólo `verificar.sh` |
+| k6 ≥ 0.49 | no | Sólo si se prefiere correr la carga fuera de Docker |
 
 ```bash
-docker --version && k6 version && jq --version
+docker --version && docker compose version
 ```
 
-> **Ojo con el comando de Compose.** En algunas máquinas `docker compose` (con espacio) no
-> está enganchado al CLI. Si te da `unknown command`, usá `docker-compose` con guion —
-> es el que funciona en la máquina donde se armó esta demo. Todos los comandos de abajo
-> usan la forma con guion.
+> **`docker compose` o `docker-compose`.** En algunas máquinas el plugin (con espacio) no
+> está enganchado al CLI y hay que usar el binario con guion. Los scripts detectan cuál hay;
+> en los comandos de abajo, si `docker compose` da `unknown command`, usar `docker-compose`.
 
-**Puertos que tienen que estar libres:** `8080` (Nginx), `3001` (app1), `3002` (app2) y
-`5665` (panel de k6).
-
-```bash
-lsof -nP -iTCP:8080 -sTCP:LISTEN      # sin salida = libre
-```
+**Puertos que usa** (todos configurables, ver 1.1): `8080` Nginx, `3001` app1, `3002` app2.
+Opcionales: `5665` panel de k6, `3003` Grafana, `9090` Prometheus.
 
 ---
 
 ## 1. Levantar la demo
 
 ```bash
-docker-compose up --build -d
-docker-compose ps                     # deben aparecer tres: nginx, app1, app2
+./iniciar.sh
+```
+
+Construye las imágenes, levanta los tres contenedores y espera a que el proxy responda. Es lo
+mismo que:
+
+```bash
+docker compose up --build -d
+docker compose ps                     # deben aparecer tres: nginx, app1, app2
 ```
 
 La primera vez tarda un par de minutos porque construye la imagen del servicio. **Hacelo el
 día anterior**, no delante del tribunal: si el día de la exposición no hay red, las imágenes
-ya están en caché local y `docker-compose up -d` (sin `--build`) levanta igual.
+ya están en caché local y `docker compose up -d` (sin `--build`) levanta igual.
 
-Comprobación rápida de que las tres piezas responden:
+Comprobación rápida:
 
 ```bash
-curl -s localhost:8080/health | jq    # a través del proxy
-curl -s localhost:3001/health | jq    # app1 directo
-curl -s localhost:3002/health | jq    # app2 directo
+curl -s localhost:8080/health    # a través del proxy
+curl -s localhost:3001/health    # app1 directo
+curl -s localhost:3002/health    # app2 directo
 ```
+
+### 1.1 Si un puerto está ocupado
+
+Cada puerto del host se puede cambiar con una variable de entorno, sin tocar ningún archivo:
+
+```bash
+PUERTO_PROXY=18080 PUERTO_APP1=13001 PUERTO_APP2=13002 ./iniciar.sh
+```
+
+| Variable | Servicio | Por defecto |
+|---|---|---|
+| `PUERTO_PROXY` | Nginx | 8080 |
+| `PUERTO_APP1` / `PUERTO_APP2` | instancias (sólo para `/stats`) | 3001 / 3002 |
+| `PUERTO_K6` | panel de k6 | 5665 |
+| `PUERTO_GRAFANA` / `PUERTO_PROMETHEUS` | observabilidad | 3003 / 9090 |
+
+Las mismas variables las respetan `verificar.sh` y `iniciar.sh`. En Postman, cambiar
+`baseUrl`, `app1Url` y `app2Url` en las variables de la colección.
 
 ---
 
 ## 2. Verificar que las cuatro tácticas funcionan
 
+Tres formas equivalentes. Todas recorren el mismo checklist: los códigos de seguridad, los
+tres headers de evidencia y, disparando 20 pedidos en paralelo, que hubo conmutación real al
+repuesto y que después el tráfico volvió al primario.
+
+### 2.1 Postman (con interfaz)
+
+Importar `postman/AeroSur-TFU.postman_collection.json` y **Run collection**. Tres carpetas:
+
+| Carpeta | Qué prueba |
+|---|---|
+| `0 · Salud` | Las tres piezas responden |
+| `1 · Seguridad` | Autenticar (401 / 200 + token) y autorizar (403 / 200). Son los cinco pedidos del guion |
+| `2 · Disponibilidad` | Estado normal, **pico de 20 pedidos en paralelo desde Postman**, contador de app2, recuperación del primario |
+
+Cada pedido trae sus tests: todo verde = demo lista. El pico lo dispara el pre-request del
+pedido 3 con `pm.sendRequest`; la evidencia queda en la consola de Postman. El pedido 5 espera
+11 segundos a propósito (el `fail_timeout` de Nginx).
+
+### 2.2 Sin instalar nada: la misma colección con newman dentro de Docker
+
 ```bash
-./verificar.sh
+docker compose --profile verificacion run --rm newman
 ```
 
-Recorre el checklist entero sin abrir Postman: los cinco códigos de seguridad, los tres
-headers de evidencia, y —disparando 20 pedidos en paralelo— que hubo conmutación real al
-repuesto. Salida esperada:
+Corre la colección entera contra los contenedores y sale con error si alguna aserción falla.
+Salida esperada al final:
 
 ```
-Tácticas de seguridad (autenticar / autorizar actores)
-  OK   sin token -> 401 (autenticar)
-  OK   password incorrecta -> 401 (autenticar)
-  OK   login operador -> 200 + token (autenticar)
-  OK   login supervisor -> 200 + token
-  OK   PUT con token de operador -> 403 (autorizar)
-  OK   PUT con token de supervisor -> 200 (autorizar)
+│              assertions │                 36 │                 0 │
+```
 
-Artefacto de evidencia (headers del proxy)
-  OK   header X-Instancias-Probadas presente
-  OK   header X-Estados presente
-  OK   header X-Tiempo-Total presente
-  OK   X-Tiempo-Total trae un número, no '-'
+### 2.3 Con `curl`
 
+- Pedido por pedido, para mostrar en vivo o para que lo prueben los profesores: `COMANDOS.md`.
+- Todo junto: `./verificar.sh` (necesita `jq`).
+
+```
 Tácticas de disponibilidad (reintentos / repuesto redundante)
   OK   hubo conmutación: X-Estados: 503, 200
-  OK   X-Instancias-Probadas: 10.89.2.23:3000, 10.89.2.22:3000
+  OK   X-Instancias-Probadas: 172.18.0.3:3000, 172.18.0.2:3000
   OK   app2 atendió pedidos por primera vez (0 -> 15)
 
 Todo verde. La demo está lista.
 ```
 
-Si algo sale en rojo, la demo **no** está lista. Ver la sección 6.
-
-> Después de correr esto, app1 queda marcada como caída por Nginx durante 10 segundos.
-> Esperá ese rato antes de empezar la exposición para que el primer pedido del guion salga
-> del primario.
+> Después de cualquier verificación, app1 queda marcada como caída por Nginx durante 10
+> segundos. Esperá ese rato antes de empezar la exposición para que el primer pedido del
+> guion salga del primario. Para dejar los contadores en cero sin reiniciar nada:
+>
+> ```bash
+> curl -s -X POST localhost:3001/stats/reset; curl -s -X POST localhost:3002/stats/reset
+> ```
 
 ---
 
 ## 3. Tácticas de seguridad (Postman)
 
-Importar `postman/AeroSur-Seguridad.postman_collection.json`. Los cinco pedidos van en orden
-y los logins guardan el token solos en la variable de colección — **no hay que copiar y pegar
-nada en vivo**.
+Carpeta `1 · Seguridad`. Los cinco pedidos van en orden y los logins guardan el token solos en
+la variable de colección — **no hay que copiar y pegar nada en vivo**.
 
 | # | Pedido | Esperado | Táctica |
 |---|---|---|---|
@@ -120,63 +161,71 @@ nada en vivo**.
 **Lo que hay que decir en el 3 y el 5:** mismo endpoint, mismo sistema, distinta identidad.
 Ahí se ve que autenticar y autorizar son dos tácticas distintas.
 
-Usuarios disponibles: `operador/1234` y `supervisor/1234`.
+Usuarios disponibles: `operador/1234` y `supervisor/1234`. (El pedido `2b`, login con password
+incorrecta, está en la colección para la verificación; en vivo se puede saltar.)
 
 ---
 
-## 4. Tácticas de disponibilidad (k6)
+## 4. Tácticas de disponibilidad
 
-### 4.1 Obtener un token para la carga
-
-```bash
-TOKEN=$(curl -s -X POST localhost:8080/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"usuario":"operador","password":"1234"}' | jq -r .token)
-echo "${TOKEN:0:20}..."     # confirmá que no está vacío
-```
-
-Dura una hora; la demo dura cinco minutos.
-
-### 4.2 Mirar los headers en operación normal
+### 4.1 Los headers en operación normal
 
 ```bash
+TOKEN=$(curl -s -X POST localhost:8080/auth/login -H 'Content-Type: application/json' -d '{"usuario":"operador","password":"1234"}' | jq -r .token)
 curl -si localhost:8080/api/equipaje/1/scan -H "Authorization: Bearer $TOKEN" | grep '^X-'
 ```
 
 Con poca carga aparece **una sola IP** y **un solo estado**: todo lo atiende el primario.
 
 ```
-X-Instancias-Probadas: 10.89.2.23:3000
+X-Instancias-Probadas: 172.18.0.3:3000
 X-Estados: 200
 X-Tiempo-Total: 0.307
 ```
 
-### 4.3 Preparar la ventana de contadores
+### 4.2 La ventana de contadores
 
 En una terminal aparte, dejar corriendo:
 
 ```bash
-while true; do
-  clear
-  curl -s localhost:3001/stats | jq -c
-  curl -s localhost:3002/stats | jq -c
-  sleep 1
-done
+while true; do clear; curl -s localhost:3001/stats; echo; curl -s localhost:3002/stats; echo; sleep 1; done
 ```
-
-(`watch -n 1 '...'` hace lo mismo en una línea, pero **no viene instalado en macOS**; el
-bucle de arriba funciona en cualquier lado. Cortar con `Ctrl-C`.)
 
 `atendidos` de **app2 tiene que estar en cero** antes de arrancar el pico. Ese cero es la
 evidencia de que el repuesto está *warm*: encendido pero sin tráfico.
 
-### 4.4 Lanzar la carga
+### 4.3 El pico corto (20 pedidos, un comando)
+
+Para la exposición alcanza con esto; es lo que hace el pedido 3 de Postman:
 
 ```bash
-K6_WEB_DASHBOARD=true k6 run -e TOKEN=$TOKEN carga/escenario.js
+curl -sZ --parallel-max 20 -o /dev/null -D - -H "Authorization: Bearer $TOKEN" "localhost:8080/api/equipaje/[1-20]/scan" | grep -i '^X-' | grep -B1 -A1 ', 200' | head -3
 ```
 
-Panel en **http://localhost:5665**. Dura 60 segundos en tres tramos:
+```
+X-Instancias-Probadas: 172.18.0.3:3000, 172.18.0.2:3000
+X-Estados: 503, 200
+X-Tiempo-Total: 0.002, 0.305
+```
+
+Esas tres líneas son el reintento **y** el failover al repuesto **y** el tiempo que tardó la
+conmutación, en una sola respuesta.
+
+### 4.4 El pico largo (k6, 60 segundos)
+
+Sin instalar k6: corre dentro de Docker y hace el login solo.
+
+```bash
+docker compose --profile carga run --rm --service-ports k6
+```
+
+Panel en **http://localhost:5665** mientras corre. Con k6 instalado es lo mismo:
+
+```bash
+K6_WEB_DASHBOARD=true k6 run carga/escenario.js
+```
+
+Tres tramos:
 
 | Tramo | VUs | Qué pasa |
 |---|---|---|
@@ -184,85 +233,125 @@ Panel en **http://localhost:5665**. Dura 60 segundos en tres tramos:
 | 15–45 s | 60 | Pico de tres vuelos. app1 satura y empiezan los 503 → conmutación |
 | 45–60 s | 5 | Vuelve la normalidad. El tráfico regresa solo al primario |
 
-**Qué señalar mientras corre:**
-
-1. En el panel, la tasa de error subiendo al empezar el pico.
-2. En la ventana de contadores, el de **app2 despegando desde cero**.
-3. Los headers de una respuesta cualquiera durante el pico — desde otra terminal:
-
-```bash
-curl -si localhost:8080/api/equipaje/1/scan -H "Authorization: Bearer $TOKEN" | grep '^X-'
-```
-
-```
-X-Instancias-Probadas: 10.89.2.33:3000, 10.89.2.31:3000
-X-Estados:             503, 200
-X-Tiempo-Total:        0.007, 0.310
-```
-
-Esas dos líneas son el reintento **y** el failover al repuesto **y** el tiempo que tardó la
-conmutación, en una sola respuesta.
+**Qué señalar mientras corre:** la tasa de error del primario subiendo, el contador de **app2
+despegando desde cero**, y los headers de una respuesta cualquiera desde otra terminal (4.3).
 
 ### 4.5 Cerrar con los criterios de ajuste
 
-Al terminar, k6 imprime el resumen. Los dos números que hay que leer en voz alta:
+Al terminar, k6 imprime el resumen con los umbrales atados a los criterios:
 
-- **CA-2 pide tres reintentos.** En pantalla: `proxy_next_upstream_tries 3` en `nginx.conf`.
-- **CA-1 pide conmutar en menos de 2 s.** En pantalla: el `p(95)` del resumen de k6 —da del
-  orden de **300 ms**— y el segundo valor de `X-Tiempo-Total`.
-
-Una corrida sana termina con `checks_succeeded: 100.00%` y `http_req_failed: 0.00%`: el
-cliente **nunca vio un error**, aunque el primario haya rechazado pedidos. Eso *es* la
-disponibilidad.
-
----
-
-## 5. Apagar y reiniciar
-
-```bash
-docker-compose restart     # reinicia y pone los contadores de /stats en cero
-docker-compose down        # apaga y borra los contenedores
-docker-compose down -v     # además borra volúmenes (no hay, pero por las dudas)
+```
+✓ http_req_duration: 'p(95)<2000'  p(95)=309.73ms    CA-1: conmutar en menos de 2 s
+✓ http_req_failed:   'rate<0.01'   rate=0.00%        el cliente nunca vio un error
+  atendidos_por_app1...: 164
+  atendidos_por_app2...: 4756                        lo que absorbió el repuesto
+  conmutaciones........: 18                          respuestas con "503, 200"
 ```
 
-Entre ensayo y ensayo conviene `restart`, para que app2 vuelva a arrancar en cero y el
-efecto "despega desde cero" se vea igual que la primera vez.
+- **CA-2 pide tres reintentos.** En pantalla: `proxy_next_upstream_tries 3` en `nginx.conf`.
+- **CA-1 pide conmutar en menos de 2 s.** En pantalla: el `p(95)` del resumen (del orden de
+  **300 ms**) y el segundo valor de `X-Tiempo-Total`.
+
+Una corrida sana termina con `http_req_failed: 0.00%`: el cliente **nunca vio un error**, aunque
+el primario haya rechazado pedidos. Eso *es* la disponibilidad.
 
 ---
 
-## 6. Si algo falla
+## 5. Opcional: ver la conmutación en un gráfico (Grafana)
+
+Para que se vea *visualmente* cómo el tráfico pasa de un contenedor al otro. Es un perfil
+aparte: **no se levanta salvo que se pida**, y la demo no depende de él.
+
+```bash
+docker compose --profile observabilidad up -d
+```
+
+Abre **http://localhost:3003** directo en el tablero *AeroSur · conmutación app1 → app2*, sin
+login. Prometheus raspa `/metrics` de cada instancia una vez por segundo; el tablero se
+refresca cada segundo y muestra:
+
+- **Pedidos atendidos por segundo, por instancia:** app1 en azul, app2 en naranja. Durante el
+  pico la curva naranja despega desde cero y al bajar la carga vuelve a cero.
+- **Rechazos (503) por segundo:** el primario saturado.
+- Contadores de atendidos, en vuelo y rechazados.
+
+Correr el k6 de 4.4 con el tablero abierto es la versión visual de toda la sección 4.
+
+Para apagarlo junto con lo demás: `docker compose --profile observabilidad down`.
+
+---
+
+## 6. Apagar y reiniciar
+
+```bash
+curl -s -X POST localhost:3001/stats/reset; curl -s -X POST localhost:3002/stats/reset   # contadores a cero
+docker compose down                # apaga y borra los contenedores
+docker compose --profile observabilidad --profile carga --profile verificacion down   # todo, incluidos los perfiles
+```
+
+Entre ensayo y ensayo conviene el `reset`, para que app2 vuelva a cero y el efecto "despega
+desde cero" se vea igual que la primera vez. Es preferible a reiniciar contenedores: al
+reiniciar app1 y app2 sueltas pueden intercambiar IPs; Nginx ahora vuelve a resolver los
+nombres cada 2 s (`resolve` en `nginx.conf`) justamente para tolerar eso, pero el reset no
+toca nada y es instantáneo.
+
+---
+
+## 7. Si algo falla
 
 | Síntoma | Causa | Solución |
 |---|---|---|
 | `docker compose: unknown command` | El plugin no está en el path del CLI | Usar `docker-compose` con guion |
-| `bind: address already in use` en 8080 | Otro contenedor ocupa el puerto | `lsof -nP -iTCP:8080 -sTCP:LISTEN`, después `docker rm -f <nombre>` |
-| `verificar.sh`: "el proxy no responde" | Los contenedores no terminaron de arrancar | Esperar 5 s y repetir; si sigue, `docker-compose logs nginx` |
+| `bind: address already in use` | Otro contenedor ocupa el puerto | `PUERTO_PROXY=18080 ./iniciar.sh` (ver 1.1), o `lsof -nP -iTCP:8080 -sTCP:LISTEN` y `docker rm -f <nombre>` |
+| `iniciar.sh`: "el proxy no respondió" | Los contenedores no terminaron de arrancar | Esperar 5 s y repetir; si sigue, `docker compose logs nginx` |
 | Todos los pedidos dan `401` después de conmutar | `SECRETO` distinto entre app1 y app2 | Tienen que ser idénticos en `docker-compose.yml` |
 | Bajo carga el cliente ve muchos errores | El repuesto también satura | `MAX_CONCURRENTES` de app2 debe superar el pico de VUs de k6 (hoy 100 > 60) |
 | `X-Estados` nunca muestra dos valores | Falta `http_503` en `proxy_next_upstream` | Es el error más común. Verificar `nginx/nginx.conf` |
-| El panel de k6 no abre | k6 < 0.49 | Actualizar, o usar el resumen de texto del final: ya trae p95 y tasa de error |
 | Los headers `X-` no aparecen | Falta `always` en los `add_header` | Sin `always` no se agregan en respuestas de error |
-| `X-Tiempo-Total` sale `-` en vez de un número | Se usó `$upstream_response_time` | Tiene que ser `$upstream_header_time`: el otro todavía no tiene valor cuando Nginx manda los headers |
+| `X-Tiempo-Total` sale `-` en vez de un número | Se usó `$upstream_response_time` | Tiene que ser `$upstream_header_time` |
+| Después de reiniciar app1/app2, todo lo atiende app2 y nunca conmuta | Las instancias intercambiaron IP y Nginx se quedó con la resolución vieja | Ya no debería pasar: `nginx.conf` usa `resolve` y re-resuelve cada 2 s. Si pasa, `docker compose restart nginx` |
+| Postman: el pedido 3 de Disponibilidad no muestra conmutación | Se corrió sin token o app2 estaba saturada | Correr la colección entera; ver que `pico` (20) sea menor que `MAX_CONCURRENTES` de app2 |
+| Postman: el pedido 5 falla ("lo atendió app2") | No pasaron 10 s desde el pico | Subir `esperaRecuperacionMs` en las variables de la colección |
+| `curl: option -Z: is unknown` | curl anterior a 7.66 | Usar el bucle `for` de `COMANDOS.md` §4 |
+| El panel de k6 no abre | k6 < 0.49 fuera de Docker | Usar el perfil `carga` de Docker, o el resumen de texto del final |
+| Grafana muestra "No data" | Prometheus todavía no raspó | Esperar 5 s; verificar `localhost:9090/targets` con los dos *up* |
+| k6 termina con muchos errores de golpe | Se corrió `iniciar.sh` o `up --build` **durante** la carga y recreó app1/app2 | No tocar los contenedores con la demo andando. El proxy se recupera solo en ~3 s, pero a 60 VUs eso son miles de 503 |
 
 **Plan B absoluto:** grabar un video de la demo funcionando la noche anterior. Si algo falla
 en vivo, se muestra la grabación y se explica sobre ella.
 
 ---
 
-## 7. Mapa de archivos
+## 8. Mapa de archivos
 
 ```
-docker-compose.yml   Tres servicios: nginx (8080), app1 (3001), app2 (3002)
-nginx/nginx.conf     Reintentos, selección de repuesto y los headers de evidencia
+iniciar.sh            Levanta la demo y espera a que responda (PUERTO_*, PERFIL=observabilidad)
+verificar.sh          Chequeo de las cuatro tácticas con curl + jq
+COMANDOS.md           Los mismos chequeos como comandos sueltos, con salida esperada
+presentacion.md       Guion: contexto de AeroSur, requerimientos, qué decir, cierre, preguntas
+plan-demo-tfu.md      Diseño, ADRs, guion cronometrado y checklist
+docker-compose.yml    nginx (8080), app1 (3001), app2 (3002) + perfiles carga / verificacion / observabilidad
+nginx/nginx.conf      Reintentos, selección de repuesto, re-resolución DNS y los headers de evidencia
 servicio/src/
-  index.js           Rutas y latencia simulada de lectura de etiqueta
-  auth.js            Autenticar + autorizar (JWT, usuarios en memoria)
-  bulkhead.js        Límite de concurrencia: produce la saturación determinista
-carga/escenario.js   Escenario de k6 en tres tramos
-postman/             Colección con los cinco pedidos de seguridad
-verificar.sh         Chequeo automatizado de las cuatro tácticas
-plan-demo-tfu.md     Diseño, ADRs, guion de 5 minutos y checklist
+  index.js            Rutas, latencia simulada, /stats, /stats/reset y /metrics
+  auth.js             Autenticar + autorizar (JWT, usuarios en memoria)
+  bulkhead.js         Límite de concurrencia: produce la saturación determinista
+carga/escenario.js    Escenario de k6 en tres tramos; hace el login solo; umbrales = criterios
+postman/
+  AeroSur-TFU.postman_collection.json   Salud + seguridad + disponibilidad (reemplaza al script)
+  generar_coleccion.py                  Genera el JSON; editar acá, no el JSON a mano
+observabilidad/       prometheus.yml y el tablero de Grafana provisionado
 ```
 
-Hay valores acoplados entre archivos (el límite de app2 contra el pico de k6, el `SECRETO`
-entre instancias). Están listados en `CLAUDE.md` antes de tocar ninguno.
+## 9. Valores acoplados entre archivos
+
+Antes de tocar uno, mover el otro:
+
+| Valor | Dónde | Acoplado con |
+|---|---|---|
+| `MAX_CONCURRENTES` de app2 (100) | `docker-compose.yml` | Pico de k6 (60 VUs) y `pico` de Postman (20): tienen que quedar por debajo |
+| `SECRETO` | `docker-compose.yml`, ambas instancias | Si difieren, el failover da 401 |
+| `fail_timeout=10s` | `nginx/nginx.conf` | `esperaRecuperacionMs` (11000) en la colección de Postman y el `sleep 11` de `COMANDOS.md` |
+| `max_fails=2` | `nginx/nginx.conf` | Con `pico` de 20 se alcanza seguro; con menos de 7 podría no marcarse caído app1 |
+| `http_503` en `proxy_next_upstream` | `nginx/nginx.conf` | El 503 de `bulkhead.js`: sin uno el otro no sirve |
+| Nombres de host `nginx`, `app1`, `app2` | `docker-compose.yml` | `nginx.conf`, `prometheus.yml`, y los `--env-var` del servicio `newman` |

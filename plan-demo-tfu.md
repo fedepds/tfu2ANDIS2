@@ -59,20 +59,26 @@ graph LR
 
 ```
 demo-tfu/
-├── docker-compose.yml
+├── docker-compose.yml        # nginx + app1 + app2; perfiles opcionales: carga, verificacion, observabilidad
+├── iniciar.sh                # levanta y espera
+├── verificar.sh              # chequeo con curl + jq
+├── COMANDOS.md               # los mismos chequeos como comandos sueltos
+├── presentacion.md           # guion: contexto, requerimientos, qué decir
 ├── nginx/
 │   └── nginx.conf
 ├── servicio/
 │   ├── Dockerfile
 │   ├── package.json
 │   └── src/
-│       ├── index.js          # servidor y rutas
+│       ├── index.js          # servidor, rutas, /stats y /metrics
 │       ├── auth.js           # autenticar + autorizar
 │       └── bulkhead.js       # límite de concurrencia (saturación controlada)
 ├── carga/
-│   └── escenario.js          # script de k6
-└── postman/
-    └── AeroSur-Seguridad.postman_collection.json
+│   └── escenario.js          # script de k6 (hace el login solo; umbrales = criterios)
+├── postman/
+│   ├── AeroSur-TFU.postman_collection.json   # salud + seguridad + disponibilidad
+│   └── generar_coleccion.py                  # genera el JSON
+└── observabilidad/           # Prometheus + tablero de Grafana (perfil opcional)
 ```
 
 ### Fase 1 — Servicio de ruteo con las tácticas de seguridad
@@ -209,6 +215,12 @@ El proxy pasa entonces a devolver error de inmediato a todo el tráfico, que es 
 escenario que la táctica debería evitar. Es el modo de falla más traicionero de esta
 configuración, porque solo aparece bajo carga sostenida.
 
+En la configuración real hay además `zone` + `resolver 127.0.0.11` + `resolve` en cada `server`:
+Nginx vuelve a resolver `app1` y `app2` cada 2 s. Sin eso, la resolución ocurre una sola vez al
+arrancar, y si se reinicia una instancia y cambia (o se intercambia) la IP, el proxy sigue
+mandando el tráfico "de app1" a la IP vieja: la demo deja de conmutar sin ningún error
+visible. Verificado en banco: pasó al reiniciar app1 y app2 sin reiniciar nginx.
+
 `$upstream_header_time` y no `$upstream_response_time`: `add_header` se evalúa en el momento en
 que Nginx manda los headers al cliente, cuando la respuesta del upstream todavía no terminó de
 llegar. Con `$upstream_response_time` el header sale con un guion en vez de un número y la
@@ -248,18 +260,25 @@ export default function () {
 }
 ```
 
-Ejecución con el panel web integrado (k6 ≥ 0.49, no requiere Prometheus ni Grafana):
+Ejecución con el panel web integrado (k6 ≥ 0.49, no requiere Prometheus ni Grafana). El
+escenario hace el login solo, no hay que pasarle un token:
 
 ```bash
-K6_WEB_DASHBOARD=true k6 run -e TOKEN=$TOKEN carga/escenario.js
+K6_WEB_DASHBOARD=true k6 run carga/escenario.js
 # panel en http://localhost:5665
 ```
 
-**Sobre Grafana:** no lo usen para esta demo. El panel integrado de k6 muestra tasa de pedidos, latencia p95 y tasa de error, que es todo lo que necesitan. Montar Prometheus + Grafana agrega tres contenedores más y un modo de falla nuevo justo antes de exponer, a cambio de gráficos más lindos. Si el docente lo pide explícitamente, se agrega después de que la demo funcione, nunca antes.
+O sin instalar k6, dentro de Docker (perfil `carga`):
+
+```bash
+docker compose --profile carga run --rm --service-ports k6
+```
+
+**Sobre Grafana:** la demo **no depende** de él. El panel integrado de k6 muestra tasa de pedidos, latencia p95 y tasa de error, que es todo lo que hace falta para el cierre. Existe un perfil opcional `observabilidad` (Prometheus + Grafana, tablero provisionado que abre solo, ver README §5) para mostrar *visualmente* cómo el tráfico pasa de app1 a app2. Usarlo únicamente si se ensayó con él: son dos contenedores más y un modo de falla nuevo justo antes de exponer. Si el día de la exposición no levanta, se sigue sin él y no se pierde nada.
 
 ### Fase 5 — Colección de Postman para seguridad
 
-Postman no sirve para mostrar carga, pero es el instrumento correcto para las tácticas de seguridad: cada pedido es un acto discreto y el resultado es legible de un vistazo.
+Postman es el instrumento correcto para las tácticas de seguridad: cada pedido es un acto discreto y el resultado es legible de un vistazo. La colección `postman/AeroSur-TFU.postman_collection.json` tiene además una carpeta de disponibilidad que dispara el pico de 20 pedidos en paralelo desde un pre-request (`pm.sendRequest`) y comprueba los headers de evidencia: es la verificación completa sin scripts de shell, y corre igual con `newman` dentro de Docker (perfil `verificacion`).
 
 | # | Pedido | Resultado esperado | Táctica que evidencia |
 |---|---|---|---|
@@ -349,7 +368,8 @@ Que los números de la demo apunten a los números del documento de la Parte 1 e
 
 ## 8. Checklist previo a la exposición
 
-- [ ] `docker compose up` levanta los cuatro contenedores sin errores
+- [ ] `./iniciar.sh` levanta los tres contenedores sin errores
+- [ ] `docker compose --profile verificacion run --rm newman` termina con 0 aserciones fallidas
 - [ ] Los cinco pedidos de Postman devuelven los códigos esperados
 - [ ] El token se guarda solo en la variable de colección
 - [ ] `curl -i localhost:8080/api/equipaje/1/scan` muestra los tres headers `X-`
