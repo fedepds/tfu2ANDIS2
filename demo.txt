@@ -1,0 +1,172 @@
+================================================================================
+DEMO TFU U2 - GRUPO 5 - CASO AEROSUR (PUC-01: transportar equipaje)
+Comandos en orden. Copiar y pegar de a un bloque.
+Verificado en esta maquina el 2026-09-02.
+================================================================================
+
+
+--------------------------------------------------------------------------------
+ANTES DE EMPEZAR (hacerlo con la sala vacia, no en vivo)
+--------------------------------------------------------------------------------
+
+docker-compose up --build -d
+
+Esperar ~10 s y confirmar que el proxy responde. Si esto no da 200, NADA
+del resto funciona:
+
+curl -s localhost:8080/health
+
+    {"instancia":"app1","estado":"ok"}
+
+Las dos instancias directo, sin pasar por el proxy:
+
+curl -s localhost:3001/health; echo; curl -s localhost:3002/health; echo
+
+Dejar los contadores en cero:
+
+curl -s -X POST localhost:3001/stats/reset >/dev/null
+curl -s -X POST localhost:3002/stats/reset >/dev/null
+
+OJO: usar SIEMPRE "docker-compose" con guion. "docker compose" con espacio no
+existe en esta maquina.
+
+
+--------------------------------------------------------------------------------
+PASO 1 - AUTENTICAR ACTORES
+--------------------------------------------------------------------------------
+
+Sin token -> 401. El pedido ni llega a la logica de ruteo.
+
+curl -si -X PUT localhost:8080/api/equipaje/123/ruta -H 'Content-Type: application/json' -d '{"ruta":"cinta-7"}' | head -1
+
+    HTTP/1.1 401 Unauthorized
+
+Password incorrecta -> 401.
+
+curl -si -X POST localhost:8080/auth/login -H 'Content-Type: application/json' -d '{"usuario":"operador","password":"incorrecta"}' | head -1
+
+    HTTP/1.1 401 Unauthorized
+
+Login OK -> token. Guardar los dos tokens (se usan en todos los pasos que siguen):
+
+TOKEN_OP=$(curl -s -X POST localhost:8080/auth/login -H 'Content-Type: application/json' -d '{"usuario":"operador","password":"1234"}' | sed 's/.*"token":"\([^"]*\)".*/\1/'); echo "${TOKEN_OP:0:25}..."
+
+TOKEN_SUP=$(curl -s -X POST localhost:8080/auth/login -H 'Content-Type: application/json' -d '{"usuario":"supervisor","password":"1234"}' | sed 's/.*"token":"\([^"]*\)".*/\1/'); echo "${TOKEN_SUP:0:25}..."
+
+
+--------------------------------------------------------------------------------
+PASO 2 - AUTORIZAR ACTORES
+--------------------------------------------------------------------------------
+Mismo endpoint, mismo sistema, distinta identidad. Eso separa las dos tacticas.
+
+Operador (autenticado, pero sin permiso) -> 403:
+
+curl -s -X PUT localhost:8080/api/equipaje/123/ruta -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN_OP" -d '{"ruta":"cinta-7"}'
+
+    {"error":"rol sin permiso para esta operación","rolDelActor":"operador","rolesRequeridos":["supervisor"]}
+
+Supervisor -> 200:
+
+curl -s -X PUT localhost:8080/api/equipaje/123/ruta -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN_SUP" -d '{"ruta":"cinta-7"}'
+
+    {"instancia":"app1","equipaje":"123","rutaNueva":"cinta-7","modificadaPor":"supervisor"}
+
+
+--------------------------------------------------------------------------------
+PASO 3 - LINEA DE BASE: SIN CARGA ATIENDE SOLO EL PRIMARIO
+--------------------------------------------------------------------------------
+Los tres headers X- son el artefacto de evidencia central de la demo.
+
+curl -si localhost:8080/api/equipaje/1/scan -H "Authorization: Bearer $TOKEN_OP" | grep '^X-'
+
+    X-Instancias-Probadas: 10.89.2.2:3000     <- una sola IP: solo app1
+    X-Estados: 200                            <- un solo estado
+    X-Tiempo-Total: 0.304
+
+app2 en CERO. Ese cero es la prueba de que el repuesto esta warm: encendido,
+pero sin trafico.
+
+curl -s localhost:3002/stats
+
+    {"instancia":"app2","maxConcurrentes":100,"enVuelo":0,"atendidos":0,"rechazados":0}
+
+
+--------------------------------------------------------------------------------
+PASO 4 - REINTENTOS + REPUESTO REDUNDANTE (el momento clave)
+--------------------------------------------------------------------------------
+20 pedidos en paralelo. app1 admite 5 a la vez; del sexto en adelante devuelve
+503, Nginx reintenta contra app2 y el cliente igual recibe 200.
+
+curl -sZ --parallel-max 20 -o /dev/null -D - -H "Authorization: Bearer $TOKEN_OP" "localhost:8080/api/equipaje/[1-20]/scan" | grep -i '^X-Estados' | sort | uniq -c
+
+    6 X-Estados: 200
+   14 X-Estados: 503, 200
+
+Los numeros exactos varian corrida a corrida. Lo que NO varia: ninguna
+respuesta termino en error para el cliente.
+
+La respuesta completa, donde se ve reintento + failover + tiempo, en 3 lineas:
+
+curl -sZ --parallel-max 20 -o /dev/null -D - -H "Authorization: Bearer $TOKEN_OP" "localhost:8080/api/equipaje/[1-20]/scan" | grep -i '^X-' | grep -B1 -A1 ', 200'
+
+    X-Instancias-Probadas: 10.89.2.2:3000, 10.89.2.3:3000
+    X-Estados: 503, 200
+    X-Tiempo-Total: 0.002, 0.309     <- CA-1 medido: conmuto en 2 ms + 309 ms
+
+El contador de app2 despego (antes era cero) y app1 muestra lo que rechazo:
+
+curl -s localhost:3001/stats; echo; curl -s localhost:3002/stats; echo
+
+    {"instancia":"app1",...,"atendidos":10,"rechazados":14}
+    {"instancia":"app2",...,"atendidos":14,"rechazados":0}
+
+
+--------------------------------------------------------------------------------
+PASO 5 - RECUPERACION AUTOMATICA DEL PRIMARIO
+--------------------------------------------------------------------------------
+Nginx marca caido a app1 por fail_timeout=10s. Pasado ese tiempo el trafico
+vuelve solo, sin tocar nada.
+
+sleep 11; curl -si localhost:8080/api/equipaje/1/scan -H "Authorization: Bearer $TOKEN_OP" | grep -E '^X-|instancia'
+
+    X-Instancias-Probadas: 10.89.2.2:3000
+    X-Estados: 200
+    {"instancia":"app1",...}
+
+
+--------------------------------------------------------------------------------
+PASO 6 - PICO DE CARGA DE 60 s CON k6 (opcional, si sobra tiempo)
+--------------------------------------------------------------------------------
+El escenario hace el login solo. Panel en vivo: http://localhost:5665
+
+docker-compose --profile carga run --rm --service-ports k6
+
+Las tres lineas que hay que leer del resumen final:
+
+    http_req_duration  p(95)=309ms    <- CA-1: conmutar en menos de 2 s
+    http_req_failed    rate=0.00%     <- el cliente NUNCA vio un error
+    atendidos_por_app2: 4756          <- el repuesto absorbio el pico
+
+
+--------------------------------------------------------------------------------
+ENTRE ENSAYO Y ENSAYO
+--------------------------------------------------------------------------------
+Resetear contadores para que app2 arranque de cero otra vez:
+
+curl -s -X POST localhost:3001/stats/reset; echo; curl -s -X POST localhost:3002/stats/reset; echo
+
+Y esperar 11 s antes del siguiente pico (Nginx todavia tiene app1 marcada
+como caida).
+
+
+--------------------------------------------------------------------------------
+SI ALGO FALLA EN VIVO
+--------------------------------------------------------------------------------
+Todo da 502  -> nginx no resuelve app1/app2. Reiniciar el proxy:
+                  docker-compose up -d --force-recreate nginx
+                Y mirar el log:  docker logs --tail 20 tfu2-nginx-1
+
+Chequeo completo automatico (los 5 codigos + headers + failover):
+                  ./verificar.sh
+
+Bajar todo:       docker-compose down

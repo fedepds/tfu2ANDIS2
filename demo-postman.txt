@@ -1,0 +1,168 @@
+================================================================================
+DEMO TFU U2 - GRUPO 5 - CASO AEROSUR (PUC-01: transportar equipaje)
+Las mismas pruebas que demo.txt, pero desde POSTMAN. Sin terminal.
+================================================================================
+
+
+--------------------------------------------------------------------------------
+ANTES DE EMPEZAR (una sola vez, con la sala vacia)
+--------------------------------------------------------------------------------
+
+1) Levantar la demo (esto si va en la terminal, es lo unico):
+
+     docker-compose up --build -d
+
+   OJO: "docker-compose" con guion. "docker compose" con espacio no existe en
+   esta maquina.
+
+2) Postman -> Import -> File -> elegir:
+
+     postman/AeroSur-TFU.postman_collection.json
+
+   Queda la coleccion "AeroSur - TFU tacticas de arquitectura" con tres
+   carpetas: 0 Salud, 1 Seguridad, 2 Disponibilidad.
+
+3) Variables de la coleccion (ya vienen cargadas, mirar solo si algo falla):
+
+     baseUrl              http://localhost:8080    <- el proxy Nginx
+     app1Url              http://localhost:3001    <- primario, directo
+     app2Url              http://localhost:3002    <- repuesto, directo
+     token                (se llena solo en el login)
+     pico                 20                       <- pedidos en paralelo
+     esperaRecuperacionMs 11000                    <- fail_timeout + 1 s
+
+   No hay que copiar y pegar tokens: los logins guardan el token en la
+   variable de coleccion desde el script de Tests.
+
+
+--------------------------------------------------------------------------------
+LA CORRIDA COMPLETA (lo que conviene mostrar)
+--------------------------------------------------------------------------------
+
+Click derecho en la coleccion -> Run collection -> Run.
+
+Tarda ~15 s (la ultima prueba espera 11 s a proposito). Al terminar, el runner
+muestra la lista de tests en verde. Los que hay que leer en voz alta:
+
+    401 sin credencial                                    <- autenticar actores
+    403 rol sin permiso                                   <- autorizar actores
+    200 ruta modificada                                   <- mismo endpoint, otra identidad
+    el cliente NUNCA vio un error: los 20 pedidos ... 200 <- reintentos
+    REPUESTO REDUNDANTE: esa misma respuesta probo dos instancias
+    CA-1: la conmutacion al repuesto tardo menos de 2 s
+
+IMPORTANTE: abrir la Console de Postman (abajo a la izquierda, o Ctrl/Cmd+Alt+C)
+ANTES de correr. Ahi salen impresos los tres headers de evidencia, que es lo
+que hay que mostrar en pantalla:
+
+    X-Instancias-Probadas: 10.89.2.2:3000, 10.89.2.3:3000
+    X-Estados:             503, 200
+    X-Tiempo-Total:        0.002, 0.309
+
+Tambien se puede correr una carpeta sola (click derecho -> Run folder). La
+carpeta 2 hace el login por su cuenta si no hay token.
+
+
+--------------------------------------------------------------------------------
+PEDIDO POR PEDIDO (para mostrarlos de a uno, en vivo)
+--------------------------------------------------------------------------------
+Mandar cada uno con Send, en este orden. La columna de la derecha es lo que
+tiene que dar.
+
+CARPETA 0 - SALUD
+  proxy /health                GET  {{baseUrl}}/health        200 {"instancia":"app1"...}
+  app1 /health                 GET  {{app1Url}}/health        200 app1
+  app2 /health                 GET  {{app2Url}}/health        200 app2
+  Si alguno falla, la demo no esta levantada. No seguir.
+
+CARPETA 1 - SEGURIDAD
+  1  PUT ruta SIN token        PUT  {{baseUrl}}/api/equipaje/123/ruta      401
+     El pedido ni llega a la logica de ruteo.
+
+  2  Login operador            POST {{baseUrl}}/auth/login                 200 + token
+     Guarda token y tokenOperador solo.
+
+  2b Login password incorrecta POST {{baseUrl}}/auth/login                 401
+     Sin token en la respuesta.
+
+  3  PUT ruta como OPERADOR    PUT  {{baseUrl}}/api/equipaje/123/ruta      403
+     {"error":"rol sin permiso...","rolDelActor":"operador",
+      "rolesRequeridos":["supervisor"]}
+
+  4  Login supervisor          POST {{baseUrl}}/auth/login                 200 + token
+
+  5  PUT ruta como SUPERVISOR  PUT  {{baseUrl}}/api/equipaje/123/ruta      200
+     {"instancia":"app1","rutaNueva":"cinta-7","modificadaPor":"supervisor"}
+
+     El 3 y el 5 son el MISMO pedido al MISMO endpoint. Lo unico que cambia es
+     la identidad. Eso separa autenticar de autorizar.
+
+CARPETA 2 - DISPONIBILIDAD (correrla en orden, los pedidos se encadenan)
+  1  app2 /stats ANTES         GET  {{app2Url}}/stats
+     atendidos: 0   <- el repuesto esta warm: encendido, pero sin trafico.
+     Ese cero es la mitad de la evidencia; sin el, el failover no se nota.
+
+  2  Scan en operacion normal  GET  {{baseUrl}}/api/equipaje/1/scan        200
+     En la pestana Headers de la respuesta:
+       X-Instancias-Probadas: 10.89.2.2:3000   <- UNA sola IP: solo el primario
+       X-Estados: 200                          <- UN solo estado
+       X-Tiempo-Total: 0.304
+
+  3  PICO de {{pico}} pedidos  GET  {{baseUrl}}/api/equipaje/123/scan
+     El script de pre-request dispara 20 pedidos en paralelo antes de mandar
+     este. app1 admite 5 a la vez; del sexto en adelante devuelve 503, Nginx
+     reintenta contra app2 y el cliente igual recibe 200.
+     Mirar la Console:
+       X-Estados: 503, 200        <- reintento + conmutacion en un mismo pedido
+       X-Tiempo-Total: 0.002, 0.309   <- CA-1 medido: 2 ms + 309 ms
+     Los numeros exactos varian corrida a corrida. Lo que NO varia: ninguna
+     respuesta termino en error para el cliente.
+
+  4  app2 /stats DESPUES       GET  {{app2Url}}/stats
+     atendidos paso de 0 a ~14: el repuesto absorbio lo que el primario rechazo.
+
+  5  Recuperacion              GET  {{baseUrl}}/api/equipaje/1/scan        200
+     Espera 11 s (fail_timeout=10s de Nginx) y vuelve a pedir. Responde app1
+     otra vez, una sola instancia probada. El trafico vuelve solo, sin tocar
+     nada.
+
+
+--------------------------------------------------------------------------------
+ENTRE ENSAYO Y ENSAYO
+--------------------------------------------------------------------------------
+Para que app2 vuelva a arrancar de cero y el "despega desde cero" se vea igual
+que la primera vez, mandar dos POST sueltos (no estan en la coleccion, se
+arman en una pestana nueva):
+
+    POST http://localhost:3001/stats/reset
+    POST http://localhost:3002/stats/reset
+
+Y esperar 11 s antes del siguiente pico: Nginx todavia tiene a app1 marcada
+como caida.
+
+
+--------------------------------------------------------------------------------
+SI ALGO FALLA EN VIVO
+--------------------------------------------------------------------------------
+Todo 401 en la carpeta 2
+    -> la variable token esta vacia. Correr primero "2 - Login operador" de la
+       carpeta 1, o correr la coleccion entera.
+
+Los headers X- no aparecen
+    -> se esta pegando contra localhost:3001/3002 en vez de contra el proxy.
+       Los headers los pone Nginx: solo salen por {{baseUrl}} (8080).
+
+El pico no muestra ningun "503, 200"
+    -> los contadores quedaron de un ensayo anterior y app1 ya estaba marcada
+       caida: todo salio directo del repuesto (X-Estados: 200 solo). Resetear
+       contadores, esperar 11 s y repetir.
+
+Todo da 502
+    -> nginx no resuelve app1/app2. En la terminal:
+         docker-compose up -d --force-recreate nginx
+         docker logs --tail 20 tfu2-nginx-1
+
+Todo da ECONNREFUSED
+    -> la demo no esta levantada: docker-compose up --build -d
+
+Bajar todo:  docker-compose down

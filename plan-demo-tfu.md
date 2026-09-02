@@ -185,7 +185,7 @@ encima. Se fija en **100**.
 
 ```nginx
 upstream ruteo_equipaje {
-    server app1:3000 max_fails=2 fail_timeout=10s;
+    server app1:3000 max_fails=0;
     server app2:3000 backup max_fails=0;  # repuesto redundante (warm)
 }
 
@@ -208,7 +208,18 @@ server {
 }
 ```
 
-El `max_fails=0` del repuesto no es decorativo. Sin él, `backup` hereda el valor por defecto
+`max_fails=0` va en **las dos** instancias, por motivos distintos.
+
+En el primario, porque el valor por defecto convierte la táctica en otra cosa. Con
+`max_fails=2 fail_timeout=10s`, los dos primeros 503 sacan a app1 de rotación y durante los
+10 s siguientes Nginx manda todo el tráfico *directo* al repuesto: el cliente sigue atendido,
+pero ya no hay reintento que mostrar y `X-Estados` sale `200` con una sola instancia probada.
+Medido en banco con 450 pedidos a ~30/s: con `max_fails=2` sólo 10 respuestas exhibían la
+conmutación y app1 atendía 11 pedidos en 15 s; con `max_fails=0`, 375 respuestas la exhiben y
+app1 atiende los 75 que su capacidad real permite. La disponibilidad se cumplía en los dos
+casos; la evidencia de la táctica, sólo en el segundo.
+
+El `max_fails=0` del repuesto tampoco es decorativo. Sin él, `backup` hereda el valor por defecto
 `max_fails=1`: basta un único 503 de app2 para que Nginx la saque de rotación durante
 `fail_timeout` y, con el primario ya marcado como caído, no quede ningún servidor disponible.
 El proxy pasa entonces a devolver error de inmediato a todo el tráfico, que es exactamente el
