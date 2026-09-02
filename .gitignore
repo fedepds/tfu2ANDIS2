@@ -1,0 +1,8 @@
+# Guía local para Claude Code, no es parte de la entrega
+CLAUDE.md
+
+# Dependencias: se instalan dentro del contenedor (servicio/Dockerfile)
+node_modules/
+
+# macOS
+.DS_Store
