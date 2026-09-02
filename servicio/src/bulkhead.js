@@ -32,4 +32,34 @@ function estadisticas() {
   return { instancia: INSTANCIA, maxConcurrentes: MAX_CONCURRENTES, enVuelo, atendidos, rechazados };
 }
 
-module.exports = { bulkhead, estadisticas };
+// Vuelve los contadores a cero SIN reiniciar el contenedor. Reiniciar app1/app2 sueltas
+// es peligroso: pueden intercambiar IPs y Nginx, que resolvió los nombres al arrancar,
+// queda mandando el tráfico "de app1" a app2. Verificado en banco.
+function reiniciarContadores() {
+  atendidos = 0;
+  rechazados = 0;
+  return estadisticas();
+}
+
+// Los mismos contadores en formato de texto de Prometheus, para el perfil de
+// observabilidad (Grafana). Sin librerías: son cuatro líneas por métrica.
+function metricas() {
+  const etiqueta = `instancia="${INSTANCIA}"`;
+  return [
+    '# HELP equipaje_pedidos_atendidos_total Pedidos que la instancia aceptó procesar.',
+    '# TYPE equipaje_pedidos_atendidos_total counter',
+    `equipaje_pedidos_atendidos_total{${etiqueta}} ${atendidos}`,
+    '# HELP equipaje_pedidos_rechazados_total Pedidos rechazados con 503 por saturación.',
+    '# TYPE equipaje_pedidos_rechazados_total counter',
+    `equipaje_pedidos_rechazados_total{${etiqueta}} ${rechazados}`,
+    '# HELP equipaje_pedidos_en_vuelo Pedidos en curso en este instante.',
+    '# TYPE equipaje_pedidos_en_vuelo gauge',
+    `equipaje_pedidos_en_vuelo{${etiqueta}} ${enVuelo}`,
+    '# HELP equipaje_max_concurrentes Límite de concurrencia configurado (MAX_CONCURRENTES).',
+    '# TYPE equipaje_max_concurrentes gauge',
+    `equipaje_max_concurrentes{${etiqueta}} ${MAX_CONCURRENTES}`,
+    '',
+  ].join('\n');
+}
+
+module.exports = { bulkhead, estadisticas, metricas, reiniciarContadores };

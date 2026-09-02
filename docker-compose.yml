@@ -1,6 +1,17 @@
 # Estilo basado en servicios: dos instancias replicadas de un único servicio detrás de
 # un intermediario. No es microservicios: no hay impulsor que exija descomposición
 # funcional, sólo redundancia.
+#
+# `docker compose up -d` levanta SOLO los tres contenedores de la demo (nginx, app1, app2).
+#
+# Puertos del host configurables por variable de entorno, por si alguno está ocupado en la
+# máquina donde se prueba:
+#   PUERTO_PROXY=18080 docker compose up -d
+#
+# Perfiles opcionales (no se levantan con `up` a secas, hay que pedirlos):
+#   --profile carga           k6 dentro de Docker: genera el pico sin instalar k6 ni jq
+#   --profile verificacion    newman: corre la colección de Postman entera sin abrir Postman
+#   --profile observabilidad  Prometheus + Grafana: gráfico en vivo del pasaje de app1 a app2
 services:
   app1:
     build: ./servicio
@@ -9,7 +20,7 @@ services:
       MAX_CONCURRENTES: 5      # satura a ~16 pedidos/s: el primario que cae
       LATENCIA_MS: 300
       SECRETO: demo-aerosur    # idéntico en ambas: si difieren, el failover da 401
-    ports: ["3001:3000"]       # sólo para mirar /stats de esta instancia
+    ports: ["${PUERTO_APP1:-3001}:3000"]   # sólo para mirar /stats de esta instancia
 
   app2:
     build: ./servicio
@@ -18,11 +29,68 @@ services:
       MAX_CONCURRENTES: 100    # > que el pico de k6 (60 VUs): el repuesto nunca satura
       LATENCIA_MS: 300
       SECRETO: demo-aerosur
-    ports: ["3002:3000"]
+    ports: ["${PUERTO_APP2:-3002}:3000"]
 
   nginx:
     image: nginx:alpine
-    ports: ["8080:80"]
+    ports: ["${PUERTO_PROXY:-8080}:80"]
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on: [app1, app2]
+
+  # --- Generador de carga (perfil: carga) -----------------------------------------
+  #   docker compose --profile carga run --rm --service-ports k6
+  # El escenario hace el login solo: no hace falta pasarle un token ni tener jq.
+  k6:
+    image: grafana/k6:2.2.0
+    profiles: [carga]
+    volumes: ["./carga:/carga:ro"]
+    environment:
+      BASE: http://nginx                  # dentro de la red de Compose el proxy se llama nginx
+      K6_WEB_DASHBOARD: "true"
+      K6_WEB_DASHBOARD_HOST: 0.0.0.0      # sin esto el panel sólo escucha dentro del contenedor
+    ports: ["${PUERTO_K6:-5665}:5665"]
+    command: run /carga/escenario.js
+    depends_on: [nginx]
+
+  # --- Verificación automatizada (perfil: verificacion) ---------------------------
+  #   docker compose --profile verificacion run --rm newman
+  # Corre las tres carpetas de la colección (salud, seguridad, disponibilidad) contra
+  # los contenedores. Sale con código distinto de cero si alguna táctica no se cumple.
+  newman:
+    image: postman/newman:6.1.3-alpine
+    profiles: [verificacion]
+    volumes: ["./postman:/postman:ro"]
+    command: >
+      run /postman/AeroSur-TFU.postman_collection.json
+      --env-var baseUrl=http://nginx
+      --env-var app1Url=http://app1:3000
+      --env-var app2Url=http://app2:3000
+      --color on
+    depends_on: [nginx]
+
+  # --- Observabilidad (perfil: observabilidad) ------------------------------------
+  #   docker compose --profile observabilidad up -d
+  # Prometheus raspa /metrics de cada instancia cada segundo; Grafana abre directo en
+  # el tablero "AeroSur · conmutación app1 -> app2" sin pedir login.
+  prometheus:
+    image: prom/prometheus:v3.14.0
+    profiles: [observabilidad]
+    volumes: ["./observabilidad/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    ports: ["${PUERTO_PROMETHEUS:-9090}:9090"]
+    depends_on: [app1, app2]
+
+  grafana:
+    image: grafana/grafana:13.2.1
+    profiles: [observabilidad]
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_DASHBOARDS_MIN_REFRESH_INTERVAL: 1s
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/aerosur.json
+    volumes:
+      - ./observabilidad/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observabilidad/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["${PUERTO_GRAFANA:-3003}:3000"]   # 3001 app1 · 3002 app2 · 3003 Grafana
+    depends_on: [prometheus]

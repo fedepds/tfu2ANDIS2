@@ -1,6 +1,6 @@
 const express = require('express');
 const { login, autenticar, autorizar } = require('./auth');
-const { bulkhead, estadisticas } = require('./bulkhead');
+const { bulkhead, estadisticas, metricas, reiniciarContadores } = require('./bulkhead');
 
 const PUERTO = Number(process.env.PUERTO || 3000);
 const INSTANCIA = process.env.INSTANCIA || 'sin-nombre';
@@ -18,6 +18,14 @@ app.get('/health', (req, res) => res.json({ instancia: INSTANCIA, estado: 'ok' }
 // Contador por instancia: la evidencia de que app2 no recibe tráfico hasta que
 // el primario satura (repuesto redundante en modo warm, ADR-003).
 app.get('/stats', (req, res) => res.json(estadisticas()));
+
+// Entre ensayo y ensayo: deja atendidos/rechazados en cero para que "app2 despega desde
+// cero" se vea igual que la primera vez, sin tocar los contenedores.
+app.post('/stats/reset', (req, res) => res.json(reiniciarContadores()));
+
+// Lo mismo que /stats pero en formato Prometheus. Queda FUERA de /api a propósito:
+// Prometheus tiene que poder leer los contadores aunque la instancia esté saturada.
+app.get('/metrics', (req, res) => res.type('text/plain; version=0.0.4').send(metricas()));
 
 // --- Ruteo de equipaje ----------------------------------------------------
 // El bulkhead va ANTES de autenticar: una instancia saturada debe responder 503

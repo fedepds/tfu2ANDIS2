@@ -1,0 +1,11 @@
+# Raspa los contadores de las dos instancias una vez por segundo. Con menos frecuencia
+# el pico de 30 s se ve como dos o tres puntos y no como una curva.
+global:
+  scrape_interval: 1s
+  evaluation_interval: 1s
+
+scrape_configs:
+  - job_name: servicio-equipaje
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['app1:3000', 'app2:3000']
