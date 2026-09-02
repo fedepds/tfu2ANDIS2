@@ -140,8 +140,8 @@ curl -sZ --parallel-max 20 -o /dev/null -D - -H "Authorization: Bearer $TOKEN_OP
 Lectura: 5 o 6 los atendió app1 (`200`); los demás llegaron mientras app1 estaba llena, fueron
 rechazados con 503 y reintentados contra app2 **en el mismo pedido** (`503, 200`). Los números
 exactos varían de corrida en corrida; lo que no varía es que **ninguna respuesta terminó en
-error**. Si el pico se dispara más despacio, Nginx alcanza a marcar caída a app1 (`max_fails=2`)
-y las últimas respuestas salen `200` directo del repuesto.
+error**. Con `max_fails=0` en app1, todo pedido intenta primero el primario, así que la
+conmutación se ve en cada uno de los que llegan con app1 llena.
 
 Para ver la respuesta completa que muestra el reintento **y** el failover **y** el tiempo que
 tardó, en tres líneas:
@@ -206,7 +206,7 @@ X-Tiempo-Total: 0.304
 El escenario hace el login solo. El panel de k6 queda en http://localhost:5665 mientras corre.
 
 ```bash
-docker compose --profile carga run --rm --service-ports k6
+docker-compose --profile carga run --rm --service-ports k6
 ```
 
 Al final, k6 imprime el resumen. Las líneas que hay que leer en voz alta:

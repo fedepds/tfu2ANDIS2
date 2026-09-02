@@ -2,13 +2,27 @@
   "uid": "aerosur-conmutacion",
   "title": "AeroSur · conmutación app1 → app2",
   "description": "Tablero de la demo TFU: hace visible el pasaje del tráfico del primario (app1) al repuesto redundante (app2) durante el pico de carga.",
-  "tags": ["aerosur", "tfu", "tacticas"],
+  "tags": [
+    "aerosur",
+    "tfu",
+    "tacticas"
+  ],
   "timezone": "browser",
   "editable": true,
   "graphTooltip": 1,
   "refresh": "1s",
-  "time": { "from": "now-2m", "to": "now" },
-  "timepicker": { "refresh_intervals": ["1s", "2s", "5s", "10s"] },
+  "time": {
+    "from": "now-2m",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "1s",
+      "2s",
+      "5s",
+      "10s"
+    ]
+  },
   "schemaVersion": 39,
   "version": 1,
   "panels": [
@@ -16,10 +30,15 @@
       "id": 1,
       "type": "text",
       "title": "",
-      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 3,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
       "options": {
         "mode": "markdown",
-        "content": "**Qué mirar.** En operación normal **app1** (azul) atiende todo y **app2** (naranja) está en cero: el repuesto está encendido pero sin tráfico (*warm*). Al empezar el pico, app1 satura y sus **rechazos (503)** suben; Nginx reintenta contra app2 y la curva naranja **despega desde cero**: eso es *reintentos* + *repuesto redundante*. Cuando baja la carga, el tráfico vuelve solo a app1 (vencido `fail_timeout`)."
+        "content": "**Qué mirar.** En operación normal **app1** (azul) atiende todo y **app2** (naranja) está en cero: el repuesto está encendido pero sin tráfico (*warm*). Al empezar el pico, app1 se clava en su techo de ~16 req/s y todo lo que sobra se convierte en **rechazos (503)**; Nginx reintenta cada uno contra app2 y la curva naranja **despega desde cero**: eso es *reintentos* + *repuesto redundante*. Las dos curvas rojas de abajo son el mismo pedido visto desde el primario. Cuando baja la carga, app1 vuelve a absorber todo sola y app2 regresa a cero."
       }
     },
     {
@@ -27,12 +46,23 @@
       "type": "timeseries",
       "title": "Pedidos atendidos por segundo, por instancia",
       "description": "rate() del contador de pedidos aceptados. La curva de app2 es el failover.",
-      "gridPos": { "h": 11, "w": 16, "x": 0, "y": 3 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 11,
+        "w": 16,
+        "x": 0,
+        "y": 3
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "rate(equipaje_pedidos_atendidos_total[5s])",
           "legendFormat": "{{instancia}}"
         }
@@ -41,82 +71,294 @@
         "defaults": {
           "unit": "reqps",
           "min": 0,
-          "color": { "mode": "palette-classic" },
-          "custom": { "lineWidth": 2, "fillOpacity": 18, "showPoints": "never", "spanNulls": true }
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "showPoints": "never",
+            "spanNulls": true
+          }
         },
         "overrides": [
-          { "matcher": { "id": "byName", "options": "app1" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }] },
-          { "matcher": { "id": "byName", "options": "app2" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] }
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "app1"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "app2"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          }
         ]
       },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "none" } }
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
     },
     {
       "id": 3,
       "type": "stat",
       "title": "Atendidos en total",
-      "gridPos": { "h": 5, "w": 8, "x": 16, "y": 3 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 16,
+        "y": 3
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "equipaje_pedidos_atendidos_total", "legendFormat": "{{instancia}}", "instant": true }
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "equipaje_pedidos_atendidos_total",
+          "legendFormat": "{{instancia}}",
+          "instant": true
+        }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "none", "color": { "mode": "fixed", "fixedColor": "blue" } },
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
         "overrides": [
-          { "matcher": { "id": "byName", "options": "app2" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] }
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "app2"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          }
         ]
       },
-      "options": { "colorMode": "value", "graphMode": "none", "textMode": "value_and_name", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
     },
     {
       "id": 4,
       "type": "stat",
       "title": "En vuelo ahora (límite: app1 = 5, app2 = 100)",
-      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 8 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "equipaje_pedidos_en_vuelo", "legendFormat": "{{instancia}}", "instant": true }
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "equipaje_pedidos_en_vuelo",
+          "legendFormat": "{{instancia}}",
+          "instant": true
+        }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "none", "color": { "mode": "fixed", "fixedColor": "blue" } },
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
         "overrides": [
-          { "matcher": { "id": "byName", "options": "app2" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] }
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "app2"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          }
         ]
       },
-      "options": { "colorMode": "value", "graphMode": "none", "textMode": "value_and_name", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
     },
     {
       "id": 5,
       "type": "timeseries",
       "title": "Rechazos (503) por segundo: el primario saturado",
       "description": "Cada 503 de app1 es un estímulo que Nginx convierte en reintento contra app2.",
-      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 14 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 0,
+        "y": 14
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(equipaje_pedidos_rechazados_total[5s])", "legendFormat": "{{instancia}}" }
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "rate(equipaje_pedidos_rechazados_total[5s])",
+          "legendFormat": "{{instancia}}"
+        }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
           "min": 0,
-          "color": { "mode": "fixed", "fixedColor": "red" },
-          "custom": { "lineWidth": 2, "fillOpacity": 25, "showPoints": "never", "spanNulls": true }
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "red"
+          },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 25,
+            "showPoints": "never",
+            "spanNulls": true
+          }
         },
         "overrides": []
       },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "none" } }
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
     },
     {
       "id": 6,
       "type": "stat",
       "title": "Rechazados en total (503)",
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 14 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 14
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "equipaje_pedidos_rechazados_total", "legendFormat": "{{instancia}}", "instant": true }
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "equipaje_pedidos_rechazados_total",
+          "legendFormat": "{{instancia}}",
+          "instant": true
+        }
       ],
-      "fieldConfig": { "defaults": { "unit": "none", "color": { "mode": "fixed", "fixedColor": "red" } }, "overrides": [] },
-      "options": { "colorMode": "value", "graphMode": "none", "textMode": "value_and_name", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "red"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
     }
   ]
 }
